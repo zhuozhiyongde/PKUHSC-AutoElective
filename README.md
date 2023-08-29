@@ -18,6 +18,8 @@
 
 该项目需要 Python 3。
 
+在使用前，请确保你已经连接至校园网环境。
+
 首先安装依赖：
 ```bash
 pip install -r requirements.txt
