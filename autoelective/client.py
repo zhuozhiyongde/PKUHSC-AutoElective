@@ -90,8 +90,8 @@ class ElectiveClient():
             "vtoken": self.vtoken,
         })
 
-        with open(CAPTCHA_PATH + '/captcha.jpg', 'wb') as f:
-            f.write(r.content)
+        # with open(CAPTCHA_PATH + '/captcha.jpg', 'wb') as f:
+        #     f.write(r.content)
 
         return r.content
 
@@ -239,3 +239,4 @@ class ElectiveClient():
             if 'conflict' in course_config:
                 self.withdraw_course(course_config['conflict'])
             self.choose_course(course_config['class'], course_config['type'])
+            time.sleep(1)
