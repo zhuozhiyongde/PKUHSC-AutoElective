@@ -38,6 +38,13 @@ class ElectiveConfig():
         return self._config.get('captcha', 'password')
 
     @property
+    def bark_key(self):
+        try:
+            return self._config.get('bark', 'key')
+        except Exception:
+            return None
+
+    @property
     def courses(self):
         cs = {}
         for section in self._config.sections():

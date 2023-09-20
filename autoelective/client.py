@@ -15,6 +15,7 @@ import re
 import base64
 from .const import ElectiveURL
 from .config import ElectiveConfig
+from .notifier import BarkNotifier
 
 
 class ElectiveClient():
@@ -37,6 +38,8 @@ class ElectiveClient():
     def __init__(self):
         self._config = ElectiveConfig()
         self._session = Session()
+        # 如果 config 中存在
+        self._notifier = BarkNotifier()
         self._session.headers.update(self.__class__.default_headers)
         self.get_vtoken()
         self.get_batch()
@@ -121,12 +124,14 @@ class ElectiveClient():
         r = self._get(ElectiveURL.Login, data)
 
         try:
-            res_cookies = r.headers['Set-Cookie']
-            jsessionid = re.search('JSESSIONID=.*?(?=;)', res_cookies).group()
-            weu = re.search('_WEU=.*?(?=;)', res_cookies).group()
-            update_cookies = f"{weu}; {jsessionid}"
-
-            self._update_headers(Cookie=update_cookies)
+            # 如果当前 cookies 中没有 JSESSIONID
+            if 'JSESSIONID' not in self._session.cookies:
+                res_cookies = r.headers['Set-Cookie']
+                jsessionid = re.search('JSESSIONID=.*?(?=;)',
+                                       res_cookies).group()
+                weu = re.search('_WEU=.*?(?=;)', res_cookies).group()
+                update_cookies = f"{weu}; {jsessionid}"
+                self._update_headers(Cookie=update_cookies)
 
             r = r.json()
 
@@ -138,10 +143,12 @@ class ElectiveClient():
                 # print("token is: ", self.token)
 
             else:
-                raise Exception(r['msg'])
+                print(r)
+                raise Exception('login failed')
 
         except Exception as e:
             print(f"[LOGIN ERROR]: {e}")
+            self._notifier.notify_fail('尝试登录失败', e)
             raise Exception("login failed")
 
     def login(self):
@@ -192,10 +199,17 @@ class ElectiveClient():
             r = r.json()
             if r['code'] == '1':
                 print(f" - [choose] success: {teachingClassId}")
+                self._notifier.notify_success('选课成功', teachingClassId)
                 return
             raise Exception(r['msg'])
         except Exception as e:
             print(f"[CHOOSE ERROR]: {e}")
+            self._notifier.notify_fail('选课失败', e)
+            print([e])
+            # 如果 E 为 '当前时间不在选课开放时间范围内'
+            if str(e) == '当前时间不在选课开放时间范围内':
+                raise Exception('选课未开始或已结束')
+            raise Exception('选课失败')
 
     def withdraw_course(self, teachingClassId):
         deleteParam = {
@@ -219,24 +233,56 @@ class ElectiveClient():
             r = r.json()
             if r['code'] == '1':
                 print(f" - [withdraw] success: {teachingClassId}")
+                self._notifier.notify_success('退课成功', teachingClassId)
                 return
             raise Exception(r['msg'])
         except Exception as e:
             print(f"[WITHDRAW ERROR]: {e}")
+            self._notifier.notify_fail('退课失败', e)
+            raise Exception('退课失败')
 
     def start_elective(self):
         begin_time = self._batch_info['beginTime']
         # 转化为时间戳
-        begin_time = time.mktime(time.strptime(begin_time,
-                                               "%Y-%m-%d %H:%M:%S"))
-        if (begin_time - time.time() > 0):
-            print("waiting:", int(begin_time - time.time()), "s")
-            time.sleep(begin_time - time.time())
+        begin_timestamp = time.mktime(
+            time.strptime(begin_time, "%Y-%m-%d %H:%M:%S"))
+        if (begin_timestamp - time.time() > 0):
+            print(
+                f"[Waiting until]: {begin_time}, f{int(begin_timestamp - time.time())}s"
+            )
 
-        self.login()
+        if (begin_timestamp - time.time() > 130):
+            # 提前两分钟登录
+            time.sleep(begin_timestamp - time.time() - 120)
+            self.login()
+
+        # 等待选课开始
+        if (begin_timestamp - time.time()) > 0:
+            time.sleep(begin_timestamp - time.time())
+
+        retry_course = []
+
         for course_id, course_config in self._config.courses.items():
             print("current: ", course_id)
-            if 'conflict' in course_config:
-                self.withdraw_course(course_config['conflict'])
-            self.choose_course(course_config['class'], course_config['type'])
+            try:
+                if 'conflict' in course_config:
+                    self.withdraw_course(course_config['conflict'])
+                self.choose_course(course_config['class'],
+                                   course_config['type'])
+            except Exception as e:
+                print(f"[ELECTIVE ERROR]: {e}")
+                retry_course.append([course_id, course_config])
             time.sleep(1)
+
+        if len(retry_course) > 0:
+            print("retrying...")
+            for course_id, course_config in retry_course:
+                try:
+                    if 'conflict' in course_config:
+                        self.withdraw_course(course_config['conflict'])
+                    self.choose_course(course_config['class'],
+                                       course_config['type'])
+                except Exception as e:
+                    print(f"[ELECTIVE ERROR]: {e}")
+                    self._notifier.notify_fail('重新尝试选课失败', e)
+                time.sleep(1)
